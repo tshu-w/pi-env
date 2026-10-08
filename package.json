@@ -1,0 +1,23 @@
+{
+	"name": "pi-env",
+	"version": "0.1.0",
+	"description": "Run Pi's tools in a Docker container or on an SSH host.",
+	"keywords": ["pi-package", "pi-extension", "docker", "ssh"],
+	"license": "MIT",
+	"repository": "github:tshu-w/pi-env",
+	"type": "module",
+	"scripts": {
+		"test": "node --test --test-timeout=60000 tests/",
+		"typecheck": "tsc -p tsconfig.json"
+	},
+	"pi": {
+		"extensions": ["./src/index.ts"]
+	},
+	"peerDependencies": {
+		"@earendil-works/pi-coding-agent": "*",
+		"@earendil-works/pi-tui": "*"
+	},
+	"devDependencies": {
+		"typescript": "5.9.3"
+	}
+}

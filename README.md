@@ -1,0 +1,39 @@
+# Pi Env
+
+Pi Env runs Pi's tools in a Docker container or on an SSH host, while Pi
+itself stays local.
+
+```bash
+pi install git:github.com/tshu-w/pi-env
+```
+
+## Usage
+
+```bash
+pi --env docker:[user@]container[:/path]
+pi --env ssh:[user@]host[:/path]
+```
+
+Without a path, the working directory is the user's home. In a session,
+`/env` shows the current environment, `/env <environment>` switches, and
+`/env off` returns to local execution.
+
+Built-in tools and user `!` commands run in the environment, and paths are
+paths there. Project context files such as `AGENTS.md` are read from the
+environment. The environment is saved with the session.
+
+## Requirements
+
+The environment needs POSIX `sh`, and `setsid` or `perl`; grep also needs
+`rg`. Locally, `docker` or `ssh`.
+
+## Development
+
+```bash
+npm install
+npm run typecheck
+npm test
+```
+
+Tests use an `alpine:3` container and `ssh localhost` (`PI_ENV_TEST_SSH`
+sets another host), and skip what is unavailable.
