@@ -34,7 +34,7 @@ import {
 const ENTRY_TYPE = "env-state";
 const ENV_TOOLS = ["read", "write", "edit", "bash", "grep", "find", "ls"];
 
-type PersistedState = { environment: string; home: string } | { environment: null };
+type PersistedState = { environment: string; home: string } | { environment: null; error?: string };
 
 type SessionEntry = { type: string; customType?: string; data?: unknown };
 
@@ -47,8 +47,9 @@ async function resolveEnvironment(spec: string): Promise<Environment> {
 	return { target, cwd: resolved, home };
 }
 
-function serialize(env: Environment | null): PersistedState {
-	return env ? { environment: formatEnvironment(env), home: env.home } : { environment: null };
+function serialize(env: Environment | null, error?: string): PersistedState {
+	if (env) return { environment: formatEnvironment(env), home: env.home };
+	return error ? { environment: null, error } : { environment: null };
 }
 
 function deserialize(data: unknown): Environment | null {
@@ -62,9 +63,11 @@ function deserialize(data: unknown): Environment | null {
 	}
 }
 
-function findPersisted(entries: SessionEntry[]): { found: boolean; env: Environment | null } {
+function findPersisted(entries: SessionEntry[]): { found: boolean; env: Environment | null; error?: string } {
 	const entry = entries.filter((item) => item.type === "custom" && item.customType === ENTRY_TYPE).pop();
-	return entry ? { found: true, env: deserialize(entry.data) } : { found: false, env: null };
+	if (!entry) return { found: false, env: null };
+	const error = (entry.data as { error?: unknown } | undefined)?.error;
+	return { found: true, env: deserialize(entry.data), error: typeof error === "string" ? error : undefined };
 }
 
 function sshHosts(): string[] {
@@ -105,6 +108,13 @@ export default function (pi: ExtensionAPI) {
 	const initialCwd = process.cwd();
 	const groups = new ProcessGroups();
 	let active: Environment | null = null;
+	// Set when a requested environment failed; tools must not fall back to local execution.
+	let failure: string | undefined;
+
+	const current = () => {
+		if (failure) throw new Error(failure);
+		return active;
+	};
 
 	const requireActive = () => {
 		if (!active) throw new Error("No execution environment is active");
@@ -120,17 +130,18 @@ export default function (pi: ExtensionAPI) {
 	};
 
 	/** Switches the environment and stops the commands started in the one left. */
-	const setActive = (next: Environment | null, ctx: ExtensionContext) => {
+	const setActive = (next: Environment | null, ctx: ExtensionContext, error?: string) => {
 		const previous = active;
 		active = next;
+		failure = next ? undefined : error;
 		if (previous && !sameTarget(previous.target, next?.target)) void groups.stop(previous.target);
 		updateStatus(ctx);
 	};
 
 	const persist = (ctx: ExtensionContext) => {
-		const current = findPersisted(ctx.sessionManager.getBranch() as SessionEntry[]);
-		const same = current.found && JSON.stringify(serialize(current.env)) === JSON.stringify(serialize(active));
-		if (!same) pi.appendEntry(ENTRY_TYPE, serialize(active));
+		const saved = findPersisted(ctx.sessionManager.getBranch() as SessionEntry[]);
+		const same = saved.found && JSON.stringify(serialize(saved.env, saved.error)) === JSON.stringify(serialize(active, failure));
+		if (!same) pi.appendEntry(ENTRY_TYPE, serialize(active, failure));
 	};
 
 	const notify = (ctx: ExtensionContext, message: string, type: "info" | "error" = "info") => {
@@ -143,7 +154,8 @@ export default function (pi: ExtensionAPI) {
 	};
 
 	const restore = (ctx: ExtensionContext) => {
-		setActive(findPersisted(ctx.sessionManager.getBranch() as SessionEntry[]).env, ctx);
+		const saved = findPersisted(ctx.sessionManager.getBranch() as SessionEntry[]);
+		setActive(saved.env, ctx, saved.error);
 	};
 
 	const base = {
@@ -162,7 +174,7 @@ export default function (pi: ExtensionAPI) {
 	pi.registerTool({
 		...base.read,
 		async execute(id, params, signal, onUpdate, ctx) {
-			const env = active;
+			const env = current();
 			if (!env) return createReadToolDefinition(ctx.cwd).execute(id, params, signal, onUpdate, ctx);
 			const tool = createReadToolDefinition(env.cwd, { operations: createReadOperations({ target: env.target, signal }) });
 			return tool.execute(id, withPath(params, env), signal, onUpdate, { ...ctx, cwd: env.cwd });
@@ -172,7 +184,7 @@ export default function (pi: ExtensionAPI) {
 	pi.registerTool({
 		...base.write,
 		async execute(id, params, signal, onUpdate, ctx) {
-			const env = active;
+			const env = current();
 			if (!env) return createWriteToolDefinition(ctx.cwd).execute(id, params, signal, onUpdate, ctx);
 			const tool = createWriteToolDefinition(env.cwd, { operations: createWriteOperations({ target: env.target, signal }) });
 			return tool.execute(id, withPath(params, env), signal, onUpdate, { ...ctx, cwd: env.cwd });
@@ -183,7 +195,7 @@ export default function (pi: ExtensionAPI) {
 		...base.edit,
 		renderShell: "self",
 		async execute(id, params, signal, onUpdate, ctx) {
-			const env = active;
+			const env = current();
 			if (!env) return createEditToolDefinition(ctx.cwd).execute(id, params, signal, onUpdate, ctx);
 			const tool = createEditToolDefinition(env.cwd, { operations: createEditOperations({ target: env.target, signal }) });
 			return tool.execute(id, withPath(params, env), signal, onUpdate, { ...ctx, cwd: env.cwd });
@@ -193,7 +205,7 @@ export default function (pi: ExtensionAPI) {
 	pi.registerTool({
 		...base.bash,
 		async execute(id, params, signal, onUpdate, ctx) {
-			const env = active;
+			const env = current();
 			if (!env) return createBashToolDefinition(ctx.cwd).execute(id, params, signal, onUpdate, ctx);
 			const tool = createBashToolDefinition(env.cwd, { operations: createBashOperations(() => env.target, groups) });
 			try {
@@ -208,7 +220,7 @@ export default function (pi: ExtensionAPI) {
 		...base.grep,
 		defaultActive: false,
 		async execute(id, params, signal, onUpdate, ctx) {
-			const env = active;
+			const env = current();
 			if (!env) return createGrepToolDefinition(ctx.cwd).execute(id, params, signal, onUpdate, ctx);
 			const searchPath = path.posix.resolve(env.cwd, expandHome(params.path || ".", env.home));
 			return grep(env.target, searchPath, params, signal);
@@ -219,7 +231,7 @@ export default function (pi: ExtensionAPI) {
 		...base.find,
 		defaultActive: false,
 		async execute(id, params, signal, onUpdate, ctx) {
-			const env = active;
+			const env = current();
 			if (!env) return createFindToolDefinition(ctx.cwd).execute(id, params, signal, onUpdate, ctx);
 			const tool = createFindToolDefinition(env.cwd, { operations: createFindOperations({ target: env.target, signal }) });
 			return tool.execute(id, withPath(params, env), signal, onUpdate, { ...ctx, cwd: env.cwd });
@@ -230,7 +242,7 @@ export default function (pi: ExtensionAPI) {
 		...base.ls,
 		defaultActive: false,
 		async execute(id, params, signal, onUpdate, ctx) {
-			const env = active;
+			const env = current();
 			if (!env) return createLsToolDefinition(ctx.cwd).execute(id, params, signal, onUpdate, ctx);
 			const tool = createLsToolDefinition(env.cwd, { operations: createLsOperations({ target: env.target, signal }) });
 			return tool.execute(id, withPath(params, env), signal, onUpdate, { ...ctx, cwd: env.cwd });
@@ -254,11 +266,11 @@ export default function (pi: ExtensionAPI) {
 			if (!spec) {
 				notify(ctx, active
 					? `Execution environment: ${formatEnvironment(active)} (disable: /env off)`
-					: "Execution environment: off. Enable with /env docker:container:/path or /env ssh:host:/path.");
+					: failure ?? "Execution environment: off. Enable with /env docker:container:/path or /env ssh:host:/path.");
 				return;
 			}
 			if (spec === "off") {
-				if (!active) return;
+				if (!active && !failure) return;
 				const tools = toolList();
 				setActive(null, ctx);
 				persist(ctx);
@@ -296,7 +308,11 @@ export default function (pi: ExtensionAPI) {
 				if (event.reason === "startup") announceEnabled(ctx);
 				return;
 			} catch (error) {
-				notify(ctx, `Failed to initialize execution environment from --env: ${error instanceof Error ? error.message : String(error)}`, "error");
+				const reason = error instanceof Error ? error.message : String(error);
+				setActive(null, ctx, `Execution environment ${flag} is unavailable.\n${reason.trim().replace(/^/gm, "  ")}\nUse /env to select a working environment, or /env off to run locally.`);
+				persist(ctx);
+				notify(ctx, failure!, "error");
+				return;
 			}
 		}
 		restore(ctx);
@@ -310,7 +326,7 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("user_bash", () => {
-		const env = active;
+		const env = current();
 		if (!env) return;
 		const ops = createBashOperations(() => env.target, groups);
 		return { operations: { exec: (command, _cwd, options) => ops.exec(command, env.cwd, options) } };

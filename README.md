@@ -20,7 +20,8 @@ Without a path, the working directory is the user's home. In a session,
 
 Built-in tools and user `!` commands run in the environment, and paths are
 paths there. Project context files such as `AGENTS.md` are read from the
-environment. The environment is saved with the session.
+environment. The environment is saved with the session. If `--env` cannot be
+reached, tools fail instead of running locally.
 
 ## Requirements
 
