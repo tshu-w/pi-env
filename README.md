@@ -38,3 +38,7 @@ npm test
 
 Tests use an `alpine:3` container and `ssh localhost` (`PI_ENV_TEST_SSH`
 sets another host), and skip what is unavailable.
+
+## License
+
+[AGPL-3.0](LICENSE)

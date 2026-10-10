@@ -3,7 +3,7 @@
 	"version": "0.1.0",
 	"description": "Run Pi's tools in a Docker container or on an SSH host.",
 	"keywords": ["pi-package", "pi-extension", "docker", "ssh"],
-	"license": "MIT",
+	"license": "AGPL-3.0-only",
 	"repository": "github:tshu-w/pi-env",
 	"type": "module",
 	"scripts": {
